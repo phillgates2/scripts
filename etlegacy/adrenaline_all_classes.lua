@@ -2,35 +2,46 @@
 =============================================================================
  adrenaline_all_classes.lua  -  ET: Legacy server-side Lua module
 -----------------------------------------------------------------------------
- Gives an adrenaline shot (WP_MEDIC_ADRENALINE) to every player class
- EXCEPT medics:
+ Gives an adrenaline shot (WP_MEDIC_ADRENALINE) to every player class and
+ removes adrenaline from medics entirely:
 
      Soldier    (class 0) -> gets adrenaline
-     Medic      (class 1) -> NO adrenaline (skipped on purpose)
+     Medic      (class 1) -> NO adrenaline, ever (weapon stripped)
      Engineer   (class 2) -> gets adrenaline
      Field Ops  (class 3) -> gets adrenaline
      Covert Ops (class 4) -> gets adrenaline
 
  In stock ET: Legacy the adrenaline shot is a First Aid level-4 perk that
- only medics can unlock. This module grants the weapon on every spawn,
- revive and team change, so no skill level is required for the other four
- classes. Medics are deliberately skipped - they keep their normal
- skill-based adrenaline behaviour.
+ only medics can unlock. This module:
+
+   1. grants the weapon to the other four classes on every spawn, revive
+      and team change, so no skill level is required for them; and
+   2. strips the adrenaline weapon from medics so they can never use it,
+      even if they have the First Aid level-4 unlock (or if the weapon is
+      granted some other way, e.g. an admin command or another module).
 
  HOW IT WORKS
    * The et_ClientSpawn hook runs right after the engine has built the
-     player's spawn loadout (SetWolfSpawnWeapons), so the weapon can be
-     added on top of whatever the class normally carries.
+     player's spawn loadout (SetWolfSpawnWeapons), so weapons can be
+     added or removed on top of whatever the class normally carries.
+     This also covers revives (the engine restores pre-death weapons
+     AFTER the loadout is built, and the hook runs after that).
    * et.AddWeaponToPlayer(clientNum, weapon, ammo, ammoclip, setcurrent)
-     sets the weapon bit and its ammo/clip. Adrenaline shares its ammo pool
-     with the medic syringe (ammo/clip index 11); non-medics never carry a
-     syringe so that pool is free for them.
+     sets the weapon bit and its ammo/clip. Adrenaline shares its ammo
+     pool with the medic syringe (ammo/clip index 11); non-medics never
+     carry a syringe so that pool is free for them.
+   * et.RemoveWeaponFromPlayer(clientNum, weapon) only clears the weapon
+     bit - it never touches the shared ammo pool, so a medic's syringe
+     (same pool) is unaffected.
+   * Firing it applies the 10 second PW_ADRENALINE powerup (fast health
+     regen + no fatigue), exactly like the original medic version.
    * The adrenaline weapon (id 44) lives in weapon bank 7 together with
      the landmine, so players pull it out with slot key 7 (or the mouse
      wheel).
-   * One ready-to-use shot is given per spawn/revive. Firing it applies the
-     10 second PW_ADRENALINE powerup (fast health regen + no fatigue),
-     exactly like the medic version.
+   * A light safety sweep in et_RunFrame (once per second) removes the
+     weapon from any medic that still has it. The spawn hook already
+     covers the normal case; the sweep only catches weapons granted
+     mid-match.
 
  INSTALL
    1. Copy this file into your mod's luascripts folder, e.g.:
@@ -41,7 +52,7 @@
       Space-separate several modules, e.g.:
         set lua_modules "luascripts/wolfadmin/main.lua luascripts/adrenaline_all_classes.lua"
    3. Restart the map/server. On load the console prints:
-        [adrenaline_all_classes] loaded: adrenaline for all classes except medics
+        [adrenaline_all_classes] loaded: adrenaline for all classes - medics can never use it
 =============================================================================
 ]]--
 
@@ -63,10 +74,21 @@ local WP_MEDIC_ADRENALINE = (et and et.WP_MEDIC_ADRENALINE) or 44
 local ADRENALINE_AMMO     = 0
 local ADRENALINE_AMMOCLIP = 1
 
+local MAX_CLIENTS = (et and et.MAX_CLIENTS) or 64
+
+-- Interval (ms) of the safety sweep that strips adrenaline from medics.
+local SWEEP_INTERVAL = 1000
+
 local MODULE_NAME = "adrenaline_all_classes"
 
 local function log(msg)
 	et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
+end
+
+-- true if the client is on a playable team (not spectator, sess known)
+local function is_on_team(clientNum)
+	local team = et.gentity_get(clientNum, "sess.sessionTeam")
+	return team ~= nil and team ~= TEAM_SPECTATOR
 end
 
 --[[
@@ -78,15 +100,19 @@ end
    restoreHealth - 1 if health was fully restored
 ]]--
 function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
-	-- Skip spectators and anyone not on a playable team.
-	local team = et.gentity_get(clientNum, "sess.sessionTeam")
-	if team == nil or team == TEAM_SPECTATOR then
+	if not is_on_team(clientNum) then
 		return
 	end
 
-	-- Skip medics: adrenaline stays their own skill-based perk.
 	local playerClass = et.gentity_get(clientNum, "sess.playerType")
-	if playerClass == nil or playerClass == PC_MEDIC then
+	if playerClass == nil then
+		return
+	end
+
+	if playerClass == PC_MEDIC then
+		-- Medics never get adrenaline: strip the weapon if the First Aid
+		-- skill unlock (or anything else) put it in the spawn loadout.
+		et.RemoveWeaponFromPlayer(clientNum, WP_MEDIC_ADRENALINE)
 		return
 	end
 
@@ -96,7 +122,25 @@ function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
 		ADRENALINE_AMMO, ADRENALINE_AMMOCLIP, 0)
 end
 
+--[[
+ Called every server frame; levelTime is the level time in ms.
+ Runs the safety sweep once per SWEEP_INTERVAL.
+]]--
+function et_RunFrame(levelTime)
+	if not levelTime or (levelTime % SWEEP_INTERVAL) ~= 0 then
+		return
+	end
+
+	for i = 0, MAX_CLIENTS - 1 do
+		if is_on_team(i)
+			and et.gentity_get(i, "sess.playerType") == PC_MEDIC then
+			-- no-op if the medic doesn't carry it; safe to call always
+			et.RemoveWeaponFromPlayer(i, WP_MEDIC_ADRENALINE)
+		end
+	end
+end
+
 function et_InitGame(levelTime, randomSeed, restart)
 	et.RegisterModname(MODULE_NAME)
-	log("loaded: adrenaline for all classes except medics")
+	log("loaded: adrenaline for all classes - medics can never use it")
 end
