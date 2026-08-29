@@ -64,8 +64,11 @@ them (USE button, default E key) while standing next to them:
 
 * kickable: axis hand grenade (4), allied hand grenade (9), airstrike
   canister (22) and smoke grenade (29) - in the air, ticking or resting;
-* stand within `KICK_RANGE` (default 64 units), look at the projectile and
-  use it - it is kicked away from you with an extra hop;
+* stop within `KICK_RANGE` (default 64 units) of the projectile, look at it
+  and use it - it is kicked away from you with an extra hop. You have to be
+  roughly standing still (default `STATIONARY_SPEED` 120 u/s) so the kick
+  fires when you stop next to it to use it, not while you are still running
+  towards it;
 * the fuse is **not** restarted: a ticking grenade you kick still explodes
   on time, just somewhere else. Kicking is implemented the same way the
   engine handles bounces (`s.pos` TR_GRAVITY trajectory reset), so kicked
@@ -73,14 +76,42 @@ them (USE button, default E key) while standing next to them:
   per-projectile cooldown (default 1200 ms).
 
 Config (top of the file): `KICK_RANGE`, `CONE_HALF_ANGLE`, `KICK_POWER`,
-`KICK_UP`, `KICK_COOLDOWN_MS`, `KICK_SOUND`, `KICKABLE_WEAPONS`.
+`KICK_UP`, `KICK_COOLDOWN_MS`, `KICK_POP`, `KICK_SOUND`,
+`KICK_SOUND_FILE`, `STATIONARY_SPEED`, `DEBUG`, `KICKABLE_WEAPONS`.
+
+Known limitations:
+
+* **Airstrike canisters have a short kick window.** The canister
+  (WP_SMOKE_MARKER) only exists as a kickable missile for about **5 seconds
+  after it is thrown** - once the airstrike is called it turns into an
+  explosion effect and is gone, so kick it while it is still smoking on the
+  ground. The smoke bomb (WP_SMOKE_BOMB) can be kicked for its whole ~18
+  second life. Hand grenades are kickable until they explode.
+* **Kicking a canister does not cancel the airstrike** - the plane still
+  bombs the spot where the canister ended up after the kick.
+* The module never dies silently: load/init problems and runtime errors are
+  printed to the server console as `[kick_projectiles] ...` messages.
+
+Troubleshooting (`DEBUG = true`, the default):
+
+* on map start you should see `[kick_projectiles] loaded: ...`;
+* while playing, a line `[kick_projectiles] debug: kickable projectiles=N
+  players=M` is printed every 2 seconds - if `N` is 0 while a grenade lies
+  on the ground in front of you, the projectile is not being detected
+  (e.g. it is already past its missile phase); if `M` is 0, the module
+  cannot see any live players;
+* every kick prints `[kick_projectiles] kick: ent ... (weapon ...) by
+  client ...`.
+
+Set `DEBUG = false` for production.
 
 > **API note:** the Legacy Lua API does not expose the raw usercmd button
 > state, so both "USE button" (kick) and "weapon button" (disguise break)
-> are detected from observable game state (player looking at the projectile
-> in contact range / `ps.weapon` change between frames). The disguise-break
-> detection is exact for real weapon switches; the kick triggers on aim +
-> proximity, which in practice is the moment you would press USE on it.
+> are detected from observable game state (player stopped next to the
+> projectile and looking at it / `ps.weapon` change between frames). The
+> disguise-break detection is exact for real weapon switches; the kick
+> triggers on proximity + aim while standing still, which in practice is
+> the moment you would press USE on it.
 
 ## Install
 
