@@ -28,9 +28,11 @@ is a First Aid level-4 perk that only medics unlock. This module grants the
 weapon (one ready-to-use shot) on every spawn/revive to the other four
 classes with no skill requirement, and strips it from medics: the
 `et_ClientSpawn` hook runs after the engine built the spawn loadout (so the
-skill-based grant is removed in time), and a once-per-second sweep in
-`et_RunFrame` catches any adrenaline granted mid-match (admin give, other
-modules, ...). Firing it applies the normal 10 second adrenaline powerup
+skill-based grant is removed in time), and an every-frame sweep in
+`et_RunFrame` catches any adrenaline granted mid-match (First Aid level 4,
+admin give, other modules, ...). The `et_WeaponFire` hook also blocks the
+weapon if it is granted between sweeps. Firing it applies the normal 10
+second adrenaline powerup
 (health regen + no fatigue). Players select it with weapon slot key **7**
 (it shares the weapon bank with the engineer landmine).
 
