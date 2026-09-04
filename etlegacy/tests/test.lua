@@ -29,8 +29,13 @@ local function check(cond, msg)
 	end
 end
 
-local function load_module(file, et)
+local function load_module(file, et, extra_env)
 	local env = { et = et }
+	if extra_env then
+		for k, v in pairs(extra_env) do
+			env[k] = v
+		end
+	end
 	env._G = env
 	for _, k in ipairs({ "math", "string", "table", "type", "tostring", "tonumber",
 		"pcall", "ipairs", "pairs", "print", "error", "select" }) do
@@ -90,7 +95,7 @@ ents[70] = {
 }
 
 local et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = {} })
-local m = load_module("kick_projectiles.lua", et)
+local m = load_module("kick_projectiles.lua", et, { DEBUG = true })
 m.et_InitGame(0, 0, 0)
 m.et_RunFrame(3000)
 
@@ -114,7 +119,7 @@ ents[70] = {
 	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 40, 0, 0 }, trDelta = { 0, 0, 0 } },
 }
 et, _, out = harness.build({ sv_maxclients = 64, ents = ents, clientless = {} })
-m = load_module("kick_projectiles.lua", et)
+m = load_module("kick_projectiles.lua", et, { DEBUG = true })
 m.et_InitGame(0, 0, 0)
 m.et_RunFrame(1000)
 joined = table.concat(out, "\n")
@@ -135,7 +140,7 @@ ents[70] = {
 	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 40, 0, 0 }, trDelta = { 0, 0, 0 } },
 }
 et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = { [3] = true } })
-m = load_module("kick_projectiles.lua", et)
+m = load_module("kick_projectiles.lua", et, { DEBUG = true })
 m.et_InitGame(0, 0, 0)
 for frame = 1, 5 do
 	m.et_RunFrame(1000 * frame)
@@ -166,7 +171,7 @@ ents[64] = {
 	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 20, 0, 0 }, trDelta = { 0, 0, 0 } },
 }
 et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
-m = load_module("kick_projectiles.lua", et)
+m = load_module("kick_projectiles.lua", et, { DEBUG = true })
 m.et_InitGame(0, 0, 0)
 m.et_RunFrame(2000)          -- the debug summary prints from 2000 ms on
 joined = table.concat(out, "\n")
@@ -196,7 +201,7 @@ ents[80] = {
 	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 40, 0, 0 }, trDelta = { 0, 0, 0 } },
 }
 et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
-m = load_module("kick_projectiles.lua", et)
+m = load_module("kick_projectiles.lua", et, { DEBUG = true })
 m.et_InitGame(0, 0, 0)
 m.et_RunFrame(2000)
 joined = table.concat(out, "\n")
@@ -221,13 +226,33 @@ ents[64] = {
 	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 0, 40, 0 }, trDelta = { 0, 0, 0 } },
 }
 et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
-m = load_module("kick_projectiles.lua", et)
+m = load_module("kick_projectiles.lua", et, { DEBUG = true })
 m.et_InitGame(0, 0, 0)
 m.et_RunFrame(2000)
 joined = table.concat(out, "\n")
 check(not joined:find("ERROR"), "no ERROR line")
 local kick = joined:match("kick: ent 64 %(weapon 9%) by client (%d+)")
 check(kick == "0", "yaw 90 kicks the grenade (kicked by client " .. tostring(kick) .. ", expected 0)")
+
+-- ---------------------------------------------------------------------------
+print("kick_projectiles: default DEBUG = false produces no debug log spam")
+
+ents = {}
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 })
+ents[80] = {
+	["inuse"]    = 1,
+	["s.eType"]  = 3,
+	["s.weapon"] = 15,
+	["origin"]   = { 40, 0, 0 },
+	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 40, 0, 0 }, trDelta = { 0, 0, 0 } },
+}
+et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
+m = load_module("kick_projectiles.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_RunFrame(2000)
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+check(not joined:find("debug: kickable projectiles"), "default DEBUG = false produces no debug log spam")
 
 -- ---------------------------------------------------------------------------
 print("covert_disguise_break: weapon switch in front of an enemy")

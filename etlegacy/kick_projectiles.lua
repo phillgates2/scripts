@@ -76,8 +76,9 @@
      appearing, the aim test was what blocked them.
 
  DEBUG
-   Set DEBUG = true below to print diagnostics to the server console:
-   module load status, a summary every 2 seconds and every kick event.
+   Set DEBUG = true below (or in the environment) to print diagnostics to
+   the server console: module load status, a summary every 2 seconds and
+   every kick event.
    You should see "[kick_projectiles] loaded: ..." on map start and then
 
      [kick_projectiles] debug: kickable projectiles=1 of 3 missiles
@@ -117,7 +118,7 @@ local KICK_POP          = 4      -- units lifted off the surface on a kick
 local KICK_SOUND        = true   -- play a footstep sound at the projectile
 local KICK_SOUND_FILE   = "sound/footsteps/footstep1.wav"
 local STATIONARY_SPEED  = 120    -- max horizontal speed (u/s) for a "use" attempt
-local DEBUG             = true   -- console diagnostics (set false for production)
+local DEBUG             = (DEBUG ~= nil and DEBUG) or false   -- console diagnostics (default false for production)
 -- weapons that can be kicked (weapon ids, bg_public.h / et.WP_*)
 local KICKABLE_WEAPONS = {
 	[ (et and et.WP_GRENADE_LAUNCHER) or 4 ] = true,  -- axis hand grenade
