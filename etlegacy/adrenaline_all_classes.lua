@@ -82,20 +82,92 @@ local MAX_CLIENTS = (et and et.MAX_CLIENTS) or 64
 
 local MODULE_NAME = "adrenaline_all_classes"
 
+-- how many entity slots are client slots on THIS server (see
+-- refresh_client_slots below); nil until it has been read from the server
+local client_slots = nil
+
+-- client slots that turned out to have no gclient attached: reading a client
+-- field from them raises an error, so they are skipped from then on
+local no_client = {}
+
 local function log(msg)
-	et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
+	if type(et) == "table" and type(et.G_Print) == "function" then
+		et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
+	end
+end
+
+--[[
+ Number of client slots on this server.
+
+ Entity slots 0 .. sv_maxclients-1 are the client slots; the engine attaches
+ a gclient structure to exactly those. Slots sv_maxclients .. MAX_CLIENTS-1
+ exist as entities but have a NULL client pointer, and et.gentity_get() can
+ only look up a client field name (sess.* / ps.* / pers.*) when a client is
+ attached (g_lua.c -> _etH_gentity_getfield). Reading one from such a slot
+ raises
+
+     tried to get invalid gentity field "sess.sessionTeam"
+
+ which aborts the whole callback. So never loop client fields up to
+ et.MAX_CLIENTS - loop up to sv_maxclients.
+]]--
+local function refresh_client_slots()
+	local n
+
+	if type(et.trap_Cvar_Get) == "function" then
+		n = tonumber(et.trap_Cvar_Get("sv_maxclients") or "")
+	end
+
+	if not n or n <= 0 or n > MAX_CLIENTS then
+		n = MAX_CLIENTS
+	end
+
+	client_slots = n
+	return n
+end
+
+local function get_client_slots()
+	return client_slots or refresh_client_slots()
+end
+
+--[[
+ Reads a client-only field (sess.* / ps.* / pers.*) from a client slot.
+
+ Belt and braces on top of refresh_client_slots(): the read is wrapped in a
+ pcall so a slot without a gclient can never abort the module. Such a slot is
+ remembered and skipped for the rest of the map.
+
+ Returns nil when the field cannot be read.
+]]--
+local function client_get(num, field, index)
+	if no_client[num] then
+		return nil
+	end
+
+	local ok, val = pcall(et.gentity_get, num, field, index)
+	if not ok then
+		no_client[num] = true
+		log("warning: client slot " .. num .. " has no client fields ("
+			.. tostring(val) .. ") - skipping it for this map")
+		return nil
+	end
+
+	return val
 end
 
 -- true when the slot currently has a live client attached.
 --
 -- "inuse" is an entity-level field, so it can be read from ANY entity
 -- (client or not) without error. sess.* / ps.* fields only exist on client
--- entities: reading them from an empty slot makes et.gentity_get raise
--- "tried to get invalid gentity field", which aborts et_RunFrame for the
--- whole map. The engine sets inuse = 1 exactly when a slot has a spawned
--- client (and clears it on disconnect), so it is the right guard.
+-- entities: reading them from a slot with no client attached makes
+-- et.gentity_get raise "tried to get invalid gentity field", which aborts
+-- the running callback. The engine sets inuse = 1 exactly when a slot has a
+-- spawned client (and clears it on disconnect), so it is the right guard -
+-- and client fields are additionally read through client_get().
 local function has_client(clientNum)
-	return et.gentity_get(clientNum, "inuse") == 1
+	return clientNum < get_client_slots()
+		and not no_client[clientNum]
+		and et.gentity_get(clientNum, "inuse") == 1
 end
 
 -- true only for a connected client on Axis or Allies. In particular, do not
@@ -104,13 +176,13 @@ local function is_on_team(clientNum)
 	if not has_client(clientNum) then
 		return false
 	end
-	local team = et.gentity_get(clientNum, "sess.sessionTeam")
+	local team = client_get(clientNum, "sess.sessionTeam")
 	return team == TEAM_AXIS or team == TEAM_ALLIES
 end
 
 local function is_medic(clientNum)
 	return is_on_team(clientNum)
-		and et.gentity_get(clientNum, "sess.playerType") == PC_MEDIC
+		and client_get(clientNum, "sess.playerType") == PC_MEDIC
 end
 
 local function strip_adrenaline(clientNum)
@@ -132,7 +204,7 @@ function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
 		return
 	end
 
-	local playerClass = et.gentity_get(clientNum, "sess.playerType")
+	local playerClass = client_get(clientNum, "sess.playerType")
 	if playerClass == nil then
 		return
 	end
@@ -158,7 +230,7 @@ end
  and the next snapshot.
 ]]--
 function et_RunFrame(levelTime)
-	for i = 0, MAX_CLIENTS - 1 do
+	for i = 0, get_client_slots() - 1 do
 		if is_medic(i) then
 			-- no-op if the medic doesn't carry it; safe to call always
 			strip_adrenaline(i)
@@ -179,6 +251,13 @@ function et_WeaponFire(clientNum, weapon)
 end
 
 function et_InitGame(levelTime, randomSeed, restart)
-	et.RegisterModname(MODULE_NAME)
-	log("loaded: adrenaline for all classes - medics can never use it")
+	no_client = {}
+	refresh_client_slots()
+
+	if type(et.RegisterModname) == "function" then
+		et.RegisterModname(MODULE_NAME)
+	end
+
+	log("loaded: adrenaline for all classes - medics can never use it"
+		.. " (client slots: " .. get_client_slots() .. ")")
 end
