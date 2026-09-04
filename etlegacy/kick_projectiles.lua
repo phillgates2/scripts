@@ -51,6 +51,20 @@
      triggered by proximity + aim while standing still instead of the
      button press itself.
 
+ TROUBLESHOOTING
+   [kick_projectiles] ERROR: ... tried to get invalid gentity field
+   "sess.sessionTeam"
+     Client fields (sess.* / ps.* / pers.*) only exist on entity slots that
+     have a client attached. et.MAX_CLIENTS is 64, but a server only has
+     sv_maxclients client slots - the slots above that have a NULL client
+     pointer and et.gentity_get() cannot even find the field name for them,
+     so it raises this error and the whole server frame hook is aborted.
+     This module therefore only walks slots 0 .. sv_maxclients-1, checks
+     "inuse" (an entity field, always readable) first and reads every client
+     field through a protected call. If you still see this error, you are
+     running an older copy of this file - re-copy it to your luascripts
+     folder and restart the map.
+
  DEBUG
    Set DEBUG = true below to print diagnostics to the server console:
    module load status, how many kickable projectiles and live players
@@ -120,14 +134,89 @@ local kick_sound_index = 0
 
 -- last time (levelTime) we printed the debug summary
 local last_debug_print = 0
--- set once an unexpected runtime error has been reported (don't spam)
-local error_reported = false
+-- runtime errors already reported this map (message -> true), so the same
+-- error is printed once instead of every frame
+local reported_errors = {}
+
+-- how many entity slots are client slots on THIS server (see
+-- refresh_client_slots below); nil until it has been read from the server
+local client_slots = nil
+
+-- client slots that turned out to have no gclient attached: reading a
+-- client field from them raises an error, so they are skipped from then on
+local no_client = {}
 
 -- safe console print - never crash because the API is missing
 local function log(msg)
 	if type(et) == "table" and type(et.G_Print) == "function" then
 		et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
 	end
+end
+
+--[[
+ Number of client slots on this server.
+
+ Entity slots 0 .. sv_maxclients-1 are the client slots; the engine attaches
+ a gclient structure to exactly those (g_main.c: "set client fields on player
+ ents" loops over level.maxclients). Slots sv_maxclients .. MAX_CLIENTS-1
+ exist as entities but have a NULL client pointer.
+
+ That matters because et.gentity_get() looks a field name up in the client
+ field table ONLY when the entity has a client attached (g_lua.c ->
+ _etH_gentity_getfield). On a slot without one, "sess.sessionTeam" (and
+ every other sess.* / ps.* / pers.* field) is not found at all and the API
+ raises
+
+     tried to get invalid gentity field "sess.sessionTeam"
+
+ which aborts the whole et_RunFrame call. So never loop client fields up to
+ et.MAX_CLIENTS - loop up to sv_maxclients.
+]]--
+local function refresh_client_slots()
+	local n
+
+	if type(et.trap_Cvar_Get) == "function" then
+		n = tonumber(et.trap_Cvar_Get("sv_maxclients") or "")
+	end
+
+	if not n or n <= 0 or n > MAX_CLIENTS then
+		n = MAX_CLIENTS
+	end
+
+	client_slots = n
+	return n
+end
+
+-- cached client slot count; read it from the server on first use so the
+-- module also works when it is loaded after et_InitGame has run
+local function get_client_slots()
+	return client_slots or refresh_client_slots()
+end
+
+--[[
+ Reads a client-only field (sess.* / ps.* / pers.*) from a client slot.
+
+ Belt and braces on top of refresh_client_slots(): the read is wrapped in a
+ pcall so that a slot without a gclient can never abort the module. Such a
+ slot is remembered and skipped for the rest of the map (the condition never
+ changes while a map is running).
+
+ Returns nil when the field cannot be read.
+]]--
+local function client_get(num, field, index)
+	if no_client[num] then
+		return nil
+	end
+
+	local ok, val = pcall(et.gentity_get, num, field, index)
+	if not ok then
+		no_client[num] = true
+		log("warning: client slot " .. num .. " has no client fields ("
+			.. tostring(val) .. ") - skipping it for this map")
+		return nil
+	end
+
+	return val
 end
 
 -- forward view direction from ps.viewangles {yaw, pitch, roll} (degrees)
@@ -140,20 +229,20 @@ end
 
 -- collects the live players (on a team, not dead) into players[]
 local function collect_players(players)
-	for i = 0, MAX_CLIENTS - 1 do
+	for i = 0, get_client_slots() - 1 do
 		-- only read sess.* / ps.* from slots that actually have a client
 		-- attached (inuse == 1); empty slots would raise "tried to get
 		-- invalid gentity field" in et.gentity_get
 		if et.gentity_get(i, "inuse") == 1 then
-			local team = et.gentity_get(i, "sess.sessionTeam")
-			local health = et.gentity_get(i, "ps.stats", STAT_HEALTH)
+			local team = client_get(i, "sess.sessionTeam")
+			local health = client_get(i, "ps.stats", STAT_HEALTH)
 			if team and team ~= TEAM_FREE and team ~= TEAM_SPECTATOR
 				and health and health > 0 then
-				local origin = et.gentity_get(i, "ps.origin")
+				local origin = client_get(i, "ps.origin")
 				if origin then
-					local view  = et.gentity_get(i, "ps.viewangles")
-					local viewh = et.gentity_get(i, "ps.viewheight")
-					local vel   = et.gentity_get(i, "ps.velocity")
+					local view  = client_get(i, "ps.viewangles")
+					local viewh = client_get(i, "ps.viewheight")
+					local vel   = client_get(i, "ps.velocity")
 					if view and vel then
 						players[#players + 1] = {
 							num    = i,
@@ -250,7 +339,8 @@ function et_RunFrame(levelTime)
 			last_debug_print = levelTime
 			local players = {}
 			collect_players(players)
-			log("debug: kickable projectiles=" .. #nades .. " players=" .. #players)
+			log("debug: kickable projectiles=" .. #nades .. " players=" .. #players
+				.. " client slots=" .. get_client_slots())
 		end
 
 		if #nades == 0 then
@@ -298,9 +388,9 @@ function et_RunFrame(levelTime)
 		end
 	end)
 
-	if not ok and not error_reported then
-		error_reported = true
-		log("ERROR: " .. tostring(err) .. " (further errors this map are not reported)")
+	if not ok and not reported_errors[tostring(err)] then
+		reported_errors[tostring(err)] = true
+		log("ERROR: " .. tostring(err) .. " (this error is reported once per map)")
 	end
 end
 
@@ -309,8 +399,12 @@ function et_InitGame(levelTime, randomSeed, restart)
 		return
 	end
 	local ok, err = pcall(function()
-		error_reported = false
+		reported_errors = {}
+		no_client = {}
+		last_kick = {}
 		last_debug_print = 0
+
+		refresh_client_slots()
 
 		if type(et.RegisterModname) == "function" then
 			et.RegisterModname(MODULE_NAME)
@@ -329,7 +423,8 @@ function et_InitGame(levelTime, randomSeed, restart)
 			end
 		end
 
-		log("loaded: stand next to a grenade/canister, stop, look at it and use it to kick it")
+		log("loaded: stand next to a grenade/canister, stop, look at it and use it to kick it"
+			.. " (client slots: " .. get_client_slots() .. ")")
 	end)
 
 	if not ok then

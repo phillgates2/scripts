@@ -95,8 +95,80 @@ local ALT_MODE = {
 	[27] = 28, [28] = 27,   -- satchel <-> satchel detonator
 }
 
+-- how many entity slots are client slots on THIS server (see
+-- refresh_client_slots below); nil until it has been read from the server
+local client_slots = nil
+
+-- client slots that turned out to have no gclient attached: reading a client
+-- field from them raises an error, so they are skipped from then on
+local no_client = {}
+
+-- runtime errors already reported this map (message -> true)
+local reported_errors = {}
+
 local function log(msg)
-	et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
+	if type(et) == "table" and type(et.G_Print) == "function" then
+		et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
+	end
+end
+
+--[[
+ Number of client slots on this server.
+
+ Entity slots 0 .. sv_maxclients-1 are the client slots; the engine attaches
+ a gclient structure to exactly those. Slots sv_maxclients .. MAX_CLIENTS-1
+ exist as entities but have a NULL client pointer, and et.gentity_get() can
+ only look up a client field name (sess.* / ps.* / pers.*) when a client is
+ attached (g_lua.c -> _etH_gentity_getfield). Reading one from such a slot
+ raises
+
+     tried to get invalid gentity field "sess.sessionTeam"
+
+ which aborts the whole et_RunFrame call for that frame. So never loop
+ client fields up to et.MAX_CLIENTS - loop up to sv_maxclients.
+]]--
+local function refresh_client_slots()
+	local n
+
+	if type(et.trap_Cvar_Get) == "function" then
+		n = tonumber(et.trap_Cvar_Get("sv_maxclients") or "")
+	end
+
+	if not n or n <= 0 or n > MAX_CLIENTS then
+		n = MAX_CLIENTS
+	end
+
+	client_slots = n
+	return n
+end
+
+local function get_client_slots()
+	return client_slots or refresh_client_slots()
+end
+
+--[[
+ Reads a client-only field (sess.* / ps.* / pers.*) from a client slot.
+
+ Belt and braces on top of refresh_client_slots(): the read is wrapped in a
+ pcall so a slot without a gclient can never abort the module. Such a slot is
+ remembered and skipped for the rest of the map.
+
+ Returns nil when the field cannot be read.
+]]--
+local function client_get(num, field, index)
+	if no_client[num] then
+		return nil
+	end
+
+	local ok, val = pcall(et.gentity_get, num, field, index)
+	if not ok then
+		no_client[num] = true
+		log("warning: client slot " .. num .. " has no client fields ("
+			.. tostring(val) .. ") - skipping it for this map")
+		return nil
+	end
+
+	return val
 end
 
 -- forward view direction from ps.viewangles {yaw, pitch, roll} (degrees)
@@ -116,31 +188,34 @@ end
 --
 -- "inuse" is an entity-level field, so it can be read from ANY entity
 -- (client or not) without error. sess.* / ps.* fields only exist on client
--- entities: reading them from an empty slot makes et.gentity_get raise
--- "tried to get invalid gentity field", which aborts et_RunFrame for the
--- whole map. The engine sets inuse = 1 exactly when a slot has a spawned
--- client (and clears it on disconnect), so it is the right guard.
+-- entities: reading them from a slot with no client attached makes
+-- et.gentity_get raise "tried to get invalid gentity field", which aborts
+-- et_RunFrame. The engine sets inuse = 1 exactly when a slot has a spawned
+-- client (and clears it on disconnect), so it is the right guard - and
+-- client fields are additionally read through client_get().
 local function has_client(num)
-	return et.gentity_get(num, "inuse") == 1
+	return num < get_client_slots()
+		and not no_client[num]
+		and et.gentity_get(num, "inuse") == 1
 end
 
 local function is_disguised(clientNum)
-	return et.gentity_get(clientNum, "ps.powerups", PW_OPS_DISGUISED) == 1
+	return client_get(clientNum, "ps.powerups", PW_OPS_DISGUISED) == 1
 end
 
 -- true if any live enemy of the given client is in front of them
 local function enemy_in_front(cnum, eye, fwd)
-	local myTeam = et.gentity_get(cnum, "sess.sessionTeam")
+	local myTeam = client_get(cnum, "sess.sessionTeam")
 
-	for j = 0, MAX_CLIENTS - 1 do
+	for j = 0, get_client_slots() - 1 do
 		-- skip ourselves and any empty (non-client) slot - sess.* / ps.*
 		-- fields cannot be read from a slot with no client attached
 		if j ~= cnum and has_client(j) then
-			local t = et.gentity_get(j, "sess.sessionTeam")
+			local t = client_get(j, "sess.sessionTeam")
 			if t and t ~= TEAM_FREE and t ~= TEAM_SPECTATOR and t ~= myTeam then
-				local h = et.gentity_get(j, "ps.stats", STAT_HEALTH)
+				local h = client_get(j, "ps.stats", STAT_HEALTH)
 				if h and h > 0 then
-					local po = et.gentity_get(j, "ps.origin")
+					local po = client_get(j, "ps.origin")
 					if po then
 						local cx = po[1]
 						local cy = po[2]
@@ -201,9 +276,9 @@ local function check_client(i)
 		return
 	end
 
-	local team   = et.gentity_get(i, "sess.sessionTeam")
-	local health = et.gentity_get(i, "ps.stats", STAT_HEALTH)
-	local weapon = et.gentity_get(i, "ps.weapon")
+	local team   = client_get(i, "sess.sessionTeam")
+	local health = client_get(i, "ps.stats", STAT_HEALTH)
+	local weapon = client_get(i, "ps.weapon")
 
 	-- dead/limbo or off-team: drop the tracking state so a
 	-- respawn never fires a phantom "weapon switch"
@@ -219,9 +294,9 @@ local function check_client(i)
 	if prev ~= nil and not same_base_weapon(prev, weapon)
 		and is_disguised(i) then
 		-- a weapon button was used - check for an enemy in front
-		local origin = et.gentity_get(i, "ps.origin")
-		local view   = et.gentity_get(i, "ps.viewangles")
-		local viewh  = et.gentity_get(i, "ps.viewheight")
+		local origin = client_get(i, "ps.origin")
+		local view   = client_get(i, "ps.viewangles")
+		local viewh  = client_get(i, "ps.viewheight")
 		if origin and view then
 			local eye = { origin[1], origin[2],
 				origin[3] + (viewh or 32) }
@@ -238,12 +313,38 @@ end
  state of the previous frame - a one-frame delay, which is not visible.
 ]]--
 function et_RunFrame(levelTime)
-	for i = 0, MAX_CLIENTS - 1 do
-		check_client(i)
+	if type(et) ~= "table" then
+		return
+	end
+
+	-- never let a runtime error silently kill the module: report it once
+	-- per map and keep going
+	local ok, err = pcall(function()
+		for i = 0, get_client_slots() - 1 do
+			check_client(i)
+		end
+	end)
+
+	if not ok and not reported_errors[tostring(err)] then
+		reported_errors[tostring(err)] = true
+		log("ERROR: " .. tostring(err) .. " (this error is reported once per map)")
 	end
 end
 
 function et_InitGame(levelTime, randomSeed, restart)
-	et.RegisterModname(MODULE_NAME)
-	log("loaded: disguise breaks on weapon switch in front of an enemy")
+	if type(et) ~= "table" then
+		return
+	end
+
+	last_weapon     = {}
+	no_client       = {}
+	reported_errors = {}
+	refresh_client_slots()
+
+	if type(et.RegisterModname) == "function" then
+		et.RegisterModname(MODULE_NAME)
+	end
+
+	log("loaded: disguise breaks on weapon switch in front of an enemy"
+		.. " (client slots: " .. get_client_slots() .. ")")
 end
