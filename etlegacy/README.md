@@ -97,13 +97,24 @@ Known limitations:
 Troubleshooting (`DEBUG = true`, the default):
 
 * on map start you should see `[kick_projectiles] loaded: ...`;
-* while playing, a line `[kick_projectiles] debug: kickable projectiles=N
-  players=M` is printed every 2 seconds - if `N` is 0 while a grenade lies
-  on the ground in front of you, the projectile is not being detected
-  (e.g. it is already past its missile phase); if `M` is 0, the module
-  cannot see any live players;
+* while playing, a line like
+
+  ```
+  [kick_projectiles] debug: kickable projectiles=1 of 3 missiles (top entity slot 240) players=13 client slots=40
+  ```
+
+  is printed every 2 seconds. `kickable projectiles` is what the module can
+  act on, `of N missiles` is every `ET_MISSILE` it saw - including dynamite,
+  rockets and landmines, which are deliberately not kickable. So
+  `projectiles=0 of 3 missiles` means nothing throwable was in the air at
+  that instant; `projectiles=0 of 0 missiles` throughout a busy map means
+  the scan is not seeing the entities. `players=0` means the module cannot
+  see any live player;
 * every kick prints `[kick_projectiles] kick: ent ... (weapon ...) by
-  client ...`.
+  client ...`. If the debug line counts projectiles but no kick line ever
+  appears, the aim test is failing: `ps.viewangles` is `{pitch, yaw, roll}`
+  and the view vector is `(cos(pitch)*cos(yaw), cos(pitch)*sin(yaw),
+  -sin(pitch))`. Set `CONE_HALF_ANGLE` to 90 to confirm.
 
 Set `DEBUG = false` for production.
 
