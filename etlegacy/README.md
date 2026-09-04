@@ -94,10 +94,10 @@ Known limitations:
 * The module never dies silently: load/init problems and runtime errors are
   printed to the server console as `[kick_projectiles] ...` messages.
 
-Troubleshooting (`DEBUG = true`, the default):
+Troubleshooting (`DEBUG = true`):
 
 * on map start you should see `[kick_projectiles] loaded: ...`;
-* while playing, a line like
+* while playing (when `DEBUG = true`), a line like
 
   ```
   [kick_projectiles] debug: kickable projectiles=1 of 3 missiles (top entity slot 240) players=13 client slots=40
@@ -116,7 +116,7 @@ Troubleshooting (`DEBUG = true`, the default):
   and the view vector is `(cos(pitch)*cos(yaw), cos(pitch)*sin(yaw),
   -sin(pitch))`. Set `CONE_HALF_ANGLE` to 90 to confirm.
 
-Set `DEBUG = false` for production.
+`DEBUG` is `false` by default for production. Set `DEBUG = true` to enable diagnostics.
 
 > **API note:** the Legacy Lua API does not expose the raw usercmd button
 > state, so both "USE button" (kick) and "weapon button" (disguise break)
