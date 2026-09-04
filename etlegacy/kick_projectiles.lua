@@ -65,12 +65,30 @@
      running an older copy of this file - re-copy it to your luascripts
      folder and restart the map.
 
+   The debug line counts projectiles but no "kick: ent ..." line ever appears
+     A kick needs all three conditions at once: inside KICK_RANGE, standing
+     still (STATIONARY_SPEED) and inside the CONE_HALF_ANGLE view cone. The
+     view cone is the one that fails silently, and the usual cause is reading
+     ps.viewangles in the wrong order: it is {pitch, yaw, roll} (q_shared.h
+     PITCH 0 / YAW 1 / ROLL 2) and the engine's forward vector is
+     (cos(pitch)*cos(yaw), cos(pitch)*sin(yaw), -sin(pitch)) - positive
+     pitch looks DOWN. To test, raise CONE_HALF_ANGLE to 90: if kicks start
+     appearing, the aim test was what blocked them.
+
  DEBUG
    Set DEBUG = true below to print diagnostics to the server console:
-   module load status, how many kickable projectiles and live players
-   are seen each second, and every kick event. Use it to verify the
-   module is running: you should see "[kick_projectiles] loaded: ..."
-   on map start and "debug: nades=N players=M" lines while playing.
+   module load status, a summary every 2 seconds and every kick event.
+   You should see "[kick_projectiles] loaded: ..." on map start and then
+
+     [kick_projectiles] debug: kickable projectiles=1 of 3 missiles
+       (top entity slot 240) players=13 client slots=40
+
+   "kickable projectiles" is what this module can act on; "of N missiles"
+   is every ET_MISSILE the scan saw, including the ones that cannot be
+   kicked (dynamite, rockets, landmines). So projectiles=0 with missiles>0
+   simply means no grenade or canister was in the air at that moment,
+   while projectiles=0 with missiles=0 through a whole busy map means the
+   scan is not seeing the entities at all.
 
  CONFIG
    See the CONFIG block below - range, view cone, kick strength, cooldown
@@ -219,12 +237,26 @@ local function client_get(num, field, index)
 	return val
 end
 
--- forward view direction from ps.viewangles {yaw, pitch, roll} (degrees)
+-- forward view direction from ps.viewangles
+--
+-- ps.viewangles is ordered {pitch, yaw, roll}: q_shared.h defines
+-- PITCH 0, YAW 1, ROLL 2, so in Lua (1-based) angles[1] is the PITCH and
+-- angles[2] is the YAW. The engine builds the view vector in
+-- angles_vectors() (q_math.c) as
+--
+--     forward[0] =  cos(pitch) * cos(yaw)
+--     forward[1] =  cos(pitch) * sin(yaw)
+--     forward[2] = -sin(pitch)          <-- note the sign
+--
+-- Positive pitch means looking DOWN, so the vertical component is negated.
+-- Mixing the two angles up (or dropping the sign) makes the dot product
+-- below point somewhere else entirely and the "looking at it" test never
+-- succeeds: the module then reports projectiles but never kicks anything.
 local function view_forward(angles)
-	local yaw   = angles[1] * DEG2RAD
-	local pitch = angles[2] * DEG2RAD
+	local pitch = angles[1] * DEG2RAD
+	local yaw   = angles[2] * DEG2RAD
 	local cp    = math.cos(pitch)
-	return { math.cos(yaw) * cp, math.sin(yaw) * cp, math.sin(pitch) }
+	return { cp * math.cos(yaw), cp * math.sin(yaw), -math.sin(pitch) }
 end
 
 -- collects the live players (on a team, not dead) into players[]
@@ -321,15 +353,25 @@ function et_RunFrame(levelTime)
 		end
 
 		-- 1. find all kickable projectiles (few in number)
-		local nades = {}
+		--    Slots 0..MAX_CLIENTS-1 are client slots; G_Spawn() reserves them
+		--    ("the slots from 0 to MAX_CLIENTS-1 are always reserved for
+		--    clients") and hands out every other entity - grenades included -
+		--    from MAX_CLIENTS upwards, whatever sv_maxclients is. So the scan
+		--    starts at et.MAX_CLIENTS (64), not at the client slot count.
+		local nades    = {}
+		local missiles = 0    -- every ET_MISSILE seen, kickable or not
+		local top_ent  = -1   -- highest in-use entity slot seen this frame
 		for e = MAX_CLIENTS, MAX_ENTITIES - 1 do
-			if et.gentity_get(e, "inuse") == 1
-				and et.gentity_get(e, "s.eType") == ET_MISSILE then
-				local wp = et.gentity_get(e, "s.weapon")
-				if wp and KICKABLE_WEAPONS[wp] then
-					local pos = et.gentity_get(e, "origin")
-					if pos then
-						nades[#nades + 1] = { e, pos }
+			if et.gentity_get(e, "inuse") == 1 then
+				top_ent = e
+				if et.gentity_get(e, "s.eType") == ET_MISSILE then
+					missiles = missiles + 1
+					local wp = et.gentity_get(e, "s.weapon")
+					if wp and KICKABLE_WEAPONS[wp] then
+						local pos = et.gentity_get(e, "origin")
+						if pos then
+							nades[#nades + 1] = { e, pos }
+						end
 					end
 				end
 			end
@@ -339,8 +381,14 @@ function et_RunFrame(levelTime)
 			last_debug_print = levelTime
 			local players = {}
 			collect_players(players)
-			log("debug: kickable projectiles=" .. #nades .. " players=" .. #players
-				.. " client slots=" .. get_client_slots())
+			-- "of N missiles" and "top entity slot" are what make
+			-- kickable projectiles=0 interpretable: missiles > 0 with a top
+			-- slot above MAX_CLIENTS means the scan works and there simply
+			-- was no grenade/canister in the air this frame; missiles = 0
+			-- every second of a busy map means the scan is not seeing them.
+			log("debug: kickable projectiles=" .. #nades .. " of " .. missiles
+				.. " missiles (top entity slot " .. top_ent .. ") players="
+				.. #players .. " client slots=" .. get_client_slots())
 		end
 
 		if #nades == 0 then

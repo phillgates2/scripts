@@ -147,6 +147,89 @@ local warnings = select(2, joined:gsub("has no client fields", ""))
 check(warnings == 1, "clientless slot warned about exactly once (got " .. warnings .. ")")
 
 -- ---------------------------------------------------------------------------
+-- ps.viewangles is {pitch, yaw, roll} (q_shared.h: PITCH 0, YAW 1, ROLL 2) and
+-- the engine builds the view vector with forward[2] = -sin(pitch)
+-- (q_math.c angles_vectors()), so a player who looks DOWN at a grenade on the
+-- floor has a POSITIVE pitch. Every case above uses {0,0,0}, which cannot tell
+-- a correct view vector from a pitch/yaw mix-up - these can.
+print("kick_projectiles: 40-slot server, player looking DOWN at the grenade")
+
+ents = {}
+-- slot 0: pitch 30 (looking down), yaw 0 -> looking at the grenade on the floor
+ents[0] = player(2, 100, { 0, 0, 0 }, { 30, 0, 0 })
+-- grenade 20 units ahead on the ground (eye height is 40, so it is below the eyes)
+ents[64] = {
+	["inuse"]    = 1,
+	["s.eType"]  = 3,
+	["s.weapon"] = 4,
+	["origin"]   = { 20, 0, 0 },
+	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 20, 0, 0 }, trDelta = { 0, 0, 0 } },
+}
+et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
+m = load_module("kick_projectiles.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_RunFrame(2000)          -- the debug summary prints from 2000 ms on
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+check(joined:find("kickable projectiles=1", 1, true) ~= nil,
+	"grenade in slot 64 counted (entity slots start at MAX_CLIENTS)")
+check(joined:find("SET 64 s.pos", 1, true) ~= nil,
+	"grenade kicked when the player looks down at it (pitch 30)")
+check(joined:find("of 1 missiles (top entity slot 64)", 1, true) ~= nil,
+	"debug line reports the missile total and the top entity slot")
+
+-- ---------------------------------------------------------------------------
+-- The line the console shows when nothing is in the air must stay readable:
+-- "0 of 0 missiles (top entity slot -1)" means the scan saw no missile at all,
+-- while "0 of 3 missiles" means it saw missiles that are simply not kickable
+-- (dynamite, panzerfaust rocket, landmine, ...).
+print("kick_projectiles: nothing in the air - debug line stays interpretable")
+
+ents = {}
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 })
+-- a non-kickable missile (dynamite, weapon 15) must be counted but not kicked
+ents[80] = {
+	["inuse"]    = 1,
+	["s.eType"]  = 3,
+	["s.weapon"] = 15,
+	["origin"]   = { 40, 0, 0 },
+	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 40, 0, 0 }, trDelta = { 0, 0, 0 } },
+}
+et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
+m = load_module("kick_projectiles.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_RunFrame(2000)
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+check(joined:find("kickable projectiles=0 of 1 missiles (top entity slot 80) players=1 client slots=40",
+	1, true) ~= nil, "debug line: " .. (joined:match("debug:[^\n]*") or "missing"))
+check(not joined:find("SET 80 s.pos", 1, true), "dynamite (weapon 15) is not kicked")
+
+-- ---------------------------------------------------------------------------
+print("kick_projectiles: yaw-only aim, and a player facing away must not kick")
+
+ents = {}
+-- slot 0: pitch 0, yaw 90 -> looking along +Y at the grenade
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 90, 0 })
+-- slot 1: yaw 180 -> looking along -X, the grenade is behind them
+ents[1] = player(1, 100, { 0, 0, 0 }, { 0, 180, 0 })
+ents[64] = {
+	["inuse"]    = 1,
+	["s.eType"]  = 3,
+	["s.weapon"] = 9,
+	["origin"]   = { 0, 40, 0 },
+	["s.pos"]    = { trType = 6, trTime = 0, trBase = { 0, 40, 0 }, trDelta = { 0, 0, 0 } },
+}
+et, _, out = harness.build({ sv_maxclients = 40, ents = ents, clientless = {} })
+m = load_module("kick_projectiles.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_RunFrame(2000)
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+local kick = joined:match("kick: ent 64 %(weapon 9%) by client (%d+)")
+check(kick == "0", "yaw 90 kicks the grenade (kicked by client " .. tostring(kick) .. ", expected 0)")
+
+-- ---------------------------------------------------------------------------
 print("covert_disguise_break: weapon switch in front of an enemy")
 
 ents = {}

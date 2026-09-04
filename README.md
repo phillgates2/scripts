@@ -44,8 +44,11 @@ than this repository - copy it over again and restart the map.
 ## Tests
 
 `etlegacy/tests/` contains an offline regression test that runs the modules
-against a mock `et` API (including clientless entity slots). It needs nothing
-but a Lua interpreter:
+against a mock `et` API (including clientless entity slots, and the engine's
+rule that entity slots `0 .. MAX_CLIENTS-1` are reserved for clients while
+grenades are allocated from `MAX_CLIENTS` upwards). Aim tests use real pitch
+and yaw values - an all-zero `ps.viewangles` cannot tell a correct view
+vector from a pitch/yaw mix-up. It needs nothing but a Lua interpreter:
 
 ```
 lua etlegacy/tests/test.lua
