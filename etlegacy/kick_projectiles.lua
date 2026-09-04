@@ -141,26 +141,31 @@ end
 -- collects the live players (on a team, not dead) into players[]
 local function collect_players(players)
 	for i = 0, MAX_CLIENTS - 1 do
-		local team = et.gentity_get(i, "sess.sessionTeam")
-		local health = et.gentity_get(i, "ps.stats", STAT_HEALTH)
-		if team and team ~= TEAM_FREE and team ~= TEAM_SPECTATOR
-			and health and health > 0 then
-			local origin = et.gentity_get(i, "ps.origin")
-			if origin then
-				local view  = et.gentity_get(i, "ps.viewangles")
-				local viewh = et.gentity_get(i, "ps.viewheight")
-				local vel   = et.gentity_get(i, "ps.velocity")
-				if view and vel then
-					players[#players + 1] = {
-						num    = i,
-						origin = origin,
-						eye    = { origin[1], origin[2],
-							origin[3] + (viewh or 32) },
-						fwd    = view_forward(view),
-						-- horizontal speed squared - used to require the
-						-- player to stand still ("use" intent) before kicking
-						speed2 = vel[1] * vel[1] + vel[2] * vel[2],
-					}
+		-- only read sess.* / ps.* from slots that actually have a client
+		-- attached (inuse == 1); empty slots would raise "tried to get
+		-- invalid gentity field" in et.gentity_get
+		if et.gentity_get(i, "inuse") == 1 then
+			local team = et.gentity_get(i, "sess.sessionTeam")
+			local health = et.gentity_get(i, "ps.stats", STAT_HEALTH)
+			if team and team ~= TEAM_FREE and team ~= TEAM_SPECTATOR
+				and health and health > 0 then
+				local origin = et.gentity_get(i, "ps.origin")
+				if origin then
+					local view  = et.gentity_get(i, "ps.viewangles")
+					local viewh = et.gentity_get(i, "ps.viewheight")
+					local vel   = et.gentity_get(i, "ps.velocity")
+					if view and vel then
+						players[#players + 1] = {
+							num    = i,
+							origin = origin,
+							eye    = { origin[1], origin[2],
+								origin[3] + (viewh or 32) },
+							fwd    = view_forward(view),
+							-- horizontal speed squared - used to require the
+							-- player to stand still ("use" intent) before kicking
+							speed2 = vel[1] * vel[1] + vel[2] * vel[2],
+						}
+					end
 				end
 			end
 		end
