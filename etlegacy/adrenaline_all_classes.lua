@@ -86,9 +86,24 @@ local function log(msg)
 	et.G_Print("[" .. MODULE_NAME .. "] " .. msg .. "\n")
 end
 
+-- true when the slot currently has a live client attached.
+--
+-- "inuse" is an entity-level field, so it can be read from ANY entity
+-- (client or not) without error. sess.* / ps.* fields only exist on client
+-- entities: reading them from an empty slot makes et.gentity_get raise
+-- "tried to get invalid gentity field", which aborts et_RunFrame for the
+-- whole map. The engine sets inuse = 1 exactly when a slot has a spawned
+-- client (and clears it on disconnect), so it is the right guard.
+local function has_client(clientNum)
+	return et.gentity_get(clientNum, "inuse") == 1
+end
+
 -- true only for a connected client on Axis or Allies. In particular, do not
 -- treat TEAM_FREE as a playable team while a client is changing teams.
 local function is_on_team(clientNum)
+	if not has_client(clientNum) then
+		return false
+	end
 	local team = et.gentity_get(clientNum, "sess.sessionTeam")
 	return team == TEAM_AXIS or team == TEAM_ALLIES
 end

@@ -112,6 +112,18 @@ local function same_base_weapon(a, b)
 	return a == b or (ALT_MODE[a] ~= nil and ALT_MODE[a] == b)
 end
 
+-- true when the slot currently has a live client attached.
+--
+-- "inuse" is an entity-level field, so it can be read from ANY entity
+-- (client or not) without error. sess.* / ps.* fields only exist on client
+-- entities: reading them from an empty slot makes et.gentity_get raise
+-- "tried to get invalid gentity field", which aborts et_RunFrame for the
+-- whole map. The engine sets inuse = 1 exactly when a slot has a spawned
+-- client (and clears it on disconnect), so it is the right guard.
+local function has_client(num)
+	return et.gentity_get(num, "inuse") == 1
+end
+
 local function is_disguised(clientNum)
 	return et.gentity_get(clientNum, "ps.powerups", PW_OPS_DISGUISED) == 1
 end
@@ -121,7 +133,9 @@ local function enemy_in_front(cnum, eye, fwd)
 	local myTeam = et.gentity_get(cnum, "sess.sessionTeam")
 
 	for j = 0, MAX_CLIENTS - 1 do
-		if j ~= cnum then
+		-- skip ourselves and any empty (non-client) slot - sess.* / ps.*
+		-- fields cannot be read from a slot with no client attached
+		if j ~= cnum and has_client(j) then
 			local t = et.gentity_get(j, "sess.sessionTeam")
 			if t and t ~= TEAM_FREE and t ~= TEAM_SPECTATOR and t ~= myTeam then
 				local h = et.gentity_get(j, "ps.stats", STAT_HEALTH)
@@ -179,11 +193,19 @@ end
 -- checks one client; breaks the disguise when a disguised player switched
 -- weapons with an enemy in front
 local function check_client(i)
+	-- empty slots (no client attached) must be skipped before any sess.* /
+	-- ps.* read, and the tracking state reset so a respawn never fires a
+	-- phantom "weapon switch"
+	if not has_client(i) then
+		last_weapon[i] = nil
+		return
+	end
+
 	local team   = et.gentity_get(i, "sess.sessionTeam")
 	local health = et.gentity_get(i, "ps.stats", STAT_HEALTH)
 	local weapon = et.gentity_get(i, "ps.weapon")
 
-	-- no client, dead/limbo or off-team: drop the tracking state so a
+	-- dead/limbo or off-team: drop the tracking state so a
 	-- respawn never fires a phantom "weapon switch"
 	if not team or team == TEAM_SPECTATOR or not weapon
 		or not health or health <= 0 then

@@ -114,6 +114,14 @@ Set `DEBUG = false` for production.
 > disguise-break detection is exact for real weapon switches; the kick
 > triggers on proximity + aim while standing still, which in practice is
 > the moment you would press USE on it.
+>
+> **API note:** `et.gentity_get()` only resolves `sess.*` / `ps.*` fields
+> for entities that actually have a client attached. Reading one from an
+> empty client slot raises `tried to get invalid gentity field`, which
+> aborts `et_RunFrame` (spamming the console every frame). The scripts
+> therefore guard every per-slot sweep with the entity-level `inuse`
+> field (`et.gentity_get(i, "inuse") == 1`), which the engine sets
+> exactly when a slot has a spawned client.
 
 ## Install
 
