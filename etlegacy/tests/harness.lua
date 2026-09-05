@@ -14,7 +14,8 @@ local CLIENT_FIELD = {}
 for _, f in ipairs({
 	"sess.sessionTeam", "sess.playerType", "ps.stats", "ps.origin",
 	"ps.viewangles", "ps.viewheight", "ps.velocity", "ps.powerups",
-	"ps.weapon", "pers.netname",
+	"ps.weapon", "ps.weapons", "ps.weaponstate", "ps.ammo", "ps.ammoclip",
+	"pers.netname", "sess.playerWeapon", "sess.playerWeapon2",
 }) do
 	CLIENT_FIELD[f] = true
 end
@@ -38,7 +39,20 @@ function M.build(cfg)
 	et.WP_GRENADE_PINEAPPLE = 9
 	et.WP_SMOKE_MARKER      = 22
 	et.WP_SMOKE_BOMB        = 29
-	et.WP_MEDIC_ADRENALINE  = 47
+	et.WP_MEDIC_ADRENALINE  = 44
+	et.WP_KNIFE             = 1
+	et.WP_LUGER             = 2
+	et.WP_MP40              = 3
+	et.WP_COLT              = 7
+	et.WP_THOMPSON          = 8
+	et.WP_STEN              = 10
+	et.WP_MEDIC_SYRINGE     = 11
+	et.WP_LANDMINE          = 26
+	et.WP_KNIFE_KABAR       = 48
+	et.WP_MP34              = 54
+	et.MOD_KNIFE            = 5
+	et.MOD_SYRINGE          = 24
+	et.MASK_SHOT            = 1
 
 	et.output = out
 
@@ -53,7 +67,46 @@ function M.build(cfg)
 	function et.trap_SendServerCommand(_, _) end
 	function et.AddWeaponToPlayer(...) end
 	function et.RemoveWeaponFromPlayer(...) end
-	function et.trap_Trace() return { fraction = 1.0 } end
+	-- command arguments, set per test with et.set_args{...}
+	local args = {}
+	function et.set_args(t) args = t or {} end
+	function et.trap_Argc() return #args end
+	function et.trap_Argv(i) return args[i + 1] end
+	function et.ConcatArgs(i) return table.concat(args, " ", (i or 0) + 1) end
+
+	-- level time, advanced per test with et.set_time(ms)
+	local level_time = cfg.time or 0
+	function et.set_time(t) level_time = t end
+	function et.trap_Milliseconds() return level_time end
+
+	-- trace result, overridable per test with et.set_trace{...}
+	local trace_result = { fraction = 1.0, entityNum = 1023 }
+	function et.set_trace(t) trace_result = t end
+	function et.trap_Trace() return trace_result end
+
+	-- damage log: each entry is "target:attacker:damage:mod"
+	et.damage_log = {}
+	function et.G_Damage(target, inflictor, attacker, damage, dflags, mod)
+		et.damage_log[#et.damage_log + 1] =
+			target .. ":" .. attacker .. ":" .. damage .. ":" .. tostring(mod)
+	end
+
+	-- entity allocation, mirroring G_Spawn(): slots below MAX_CLIENTS are
+	-- reserved for clients, so new entities come from MAX_CLIENTS upwards
+	local next_ent = et.MAX_CLIENTS
+	function et.G_Spawn()
+		while ents[next_ent] do
+			next_ent = next_ent + 1
+		end
+		ents[next_ent] = { ["inuse"] = 1 }
+		out[#out + 1] = "SPAWN " .. next_ent
+		return next_ent
+	end
+	function et.G_FreeEntity(num)
+		ents[num] = nil
+		out[#out + 1] = "FREE " .. num
+	end
+	function et.trap_LinkEntity(_) end
 
 	function et.trap_Cvar_Get(name)
 		if name == "sv_maxclients" then
