@@ -29,7 +29,10 @@
    * et.AddWeaponToPlayer(clientNum, weapon, ammo, ammoclip, setcurrent)
      sets the weapon bit and its ammo/clip. Adrenaline shares its ammo
      pool with the medic syringe (ammo/clip index 11); non-medics never
-     carry a syringe so that pool is free for them.
+     carry a syringe so that pool is free for them. If another module
+     carries one anyway (poison_needle.lua with ALL_CLASSES = true), the
+     adrenaline shot is added on top of the existing syringe count instead
+     of resetting it.
    * et.RemoveWeaponFromPlayer(clientNum, weapon) clears the weapon bit
      and also clears the current weapon if it is selected. The shared
      syringe/adrenaline ammo pool is left alone, so medic syringes are
@@ -71,6 +74,7 @@ local TEAM_ALLIES    = (et and et.TEAM_ALLIES) or 2
 -- WP_MEDIC_ADRENALINE is weapon id 44 (bg_public.h). Use the constant the
 -- Lua API registers, with a numeric fallback just in case.
 local WP_MEDIC_ADRENALINE = (et and et.WP_MEDIC_ADRENALINE) or 44
+local WP_MEDIC_SYRINGE    = (et and et.WP_MEDIC_SYRINGE) or 11
 
 -- One ready-to-use shot in the "clip", no reserve ammo. This mirrors how
 -- the game itself spawns adrenaline for medics (classMiscWeapons entry:
@@ -185,6 +189,42 @@ local function is_medic(clientNum)
 		and client_get(clientNum, "sess.playerType") == PC_MEDIC
 end
 
+-- ps.weapons is a two-word bitmask: weapon w is bit (w % 32) of word
+-- floor(w / 32).
+local function has_weapon(clientNum, weapon)
+	local word = math.floor(weapon / 32)
+	local bit  = weapon % 32
+	local mask = client_get(clientNum, "ps.weapons", word)
+	if type(mask) ~= "number" then
+		return false
+	end
+	local div = 2 ^ bit
+	return math.floor(mask / div) % 2 == 1
+end
+
+--[[
+ Grant the adrenaline shot to a non-medic.
+
+ Adrenaline and the syringe share ammo/clip pool 11. When another module
+ (e.g. poison_needle.lua with ALL_CLASSES = true) has already put a syringe
+ into the pool, simply writing ammoclip = 1 would reset that syringe count
+ and leave the player with a single shared shot. In that case add one
+ adrenaline shot on top of whatever syringes the player already has.
+]]--
+local function grant_adrenaline(clientNum)
+	local ammo   = ADRENALINE_AMMO
+	local ammoclip = ADRENALINE_AMMOCLIP
+
+	if has_weapon(clientNum, WP_MEDIC_SYRINGE) then
+		ammo   = client_get(clientNum, "ps.ammo", WP_MEDIC_SYRINGE) or 0
+		ammoclip = (client_get(clientNum, "ps.ammoclip", WP_MEDIC_SYRINGE) or 0)
+			+ ADRENALINE_AMMOCLIP
+	end
+
+	et.AddWeaponToPlayer(clientNum, WP_MEDIC_ADRENALINE,
+		ammo, ammoclip, 0)
+end
+
 local function strip_adrenaline(clientNum)
 	-- RemoveWeaponFromPlayer also clears ps.weapon when adrenaline is
 	-- currently selected, so it cannot remain usable for this life.
@@ -218,8 +258,9 @@ function et_ClientSpawn(clientNum, revived, teamChange, restoreHealth)
 
 	-- Grant the adrenaline shot to every other class.
 	-- setcurrent = 0 -> don't force-switch the player to the weapon.
-	et.AddWeaponToPlayer(clientNum, WP_MEDIC_ADRENALINE,
-		ADRENALINE_AMMO, ADRENALINE_AMMOCLIP, 0)
+	-- If the player already carries a syringe (poison_needle's all-class
+	-- mode) the shared pool is preserved and the shot is added on top.
+	grant_adrenaline(clientNum)
 end
 
 --[[

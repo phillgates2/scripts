@@ -27,9 +27,11 @@
      Any other bank is passed through untouched (return 0), so the engine
      handles slots 1-6 exactly as before.
    * When the player owns both bank-7 weapons the module picks the one that
-     is NOT currently selected and writes it to ps.weapon. When the player
-     owns only one of them it selects that one - which reproduces stock
-     behaviour, so the module is safe to leave loaded for every class.
+     is NOT currently selected and selects it with AddWeaponToPlayer's
+     setcurrent flag (ps.weapon is read-only through et.gentity_set, so the
+     engine call is the supported write path). When the player owns only one
+     of them it selects that one - which reproduces stock behaviour, so the
+     module is safe to leave loaded for every class.
    * Ownership is read from the ps.weapons bitmask (two 32 bit words:
      weapon w is bit (w % 32) of word (w / 32)). Adrenaline (44) lives in
      word 1 bit 12, the landmine (26) in word 0 bit 26.
@@ -205,12 +207,67 @@ local function pick_bank7(clientNum)
 	return list[1]
 end
 
+local function ammo_pool(weapon)
+	if weapon == WP_MEDIC_ADRENALINE then
+		return (et and et.WP_MEDIC_SYRINGE) or 11
+	end
+	return weapon
+end
+
+-- Both bank-7 weapons are ammo weapons (landmine / adrenaline), so the
+-- re-add below must not run when the ammo fields are unreadable - it would
+-- otherwise wipe the count.
+local function uses_ammo(weapon)
+	return weapon == WP_LANDMINE or weapon == WP_MEDIC_ADRENALINE
+end
+
+-- Select a bank-7 weapon on the server.
+--
+-- ps.weapon / ps.weaponstate are read-only through et.gentity_set, so the
+-- supported way to change the current weapon is AddWeaponToPlayer with its
+-- setcurrent flag: it re-sets the (unchanged) weapon bit and ammo and writes
+-- ps.weapon in the engine. We read the ammo first so the re-add never resets
+-- a syringe/adrenaline count.
 local function select_weapon(clientNum, weapon)
+	local pool     = ammo_pool(weapon)
+	local ammo     = client_get(clientNum, "ps.ammo", pool)
+	local ammoclip = client_get(clientNum, "ps.ammoclip", pool)
+	if uses_ammo(weapon) and ammo == nil and ammoclip == nil then
+		if DEBUG then
+			log("cannot read ammo for weapon " .. weapon .. "; not switching")
+		end
+		return false
+	end
+	if ammo == nil then
+		ammo = 0
+	end
+	if ammoclip == nil then
+		ammoclip = 0
+	end
+
+	if type(et.AddWeaponToPlayer) == "function" then
+		local ok, err = pcall(et.AddWeaponToPlayer, clientNum, weapon,
+			ammo, ammoclip, 1)
+		if ok then
+			if NOTIFY and type(et.trap_SendServerCommand) == "function" then
+				local name = (weapon == WP_MEDIC_ADRENALINE) and "adrenaline" or "landmine"
+				et.trap_SendServerCommand(clientNum, "cp \"^7" .. name .. "\"")
+			end
+			if DEBUG then
+				log("client " .. clientNum .. " slot 7 -> weapon " .. weapon)
+			end
+			return true
+		end
+		if DEBUG then
+			log("ERROR (select weapon): " .. tostring(err))
+		end
+	end
+
+	-- Fallback for older engines where ps.weapon is still writable.
 	local ok = pcall(et.gentity_set, clientNum, "ps.weapon", weapon)
 	if not ok then
 		return false
 	end
-	-- weaponstate 0 == WEAPON_READY: makes the switch take effect at once
 	pcall(et.gentity_set, clientNum, "ps.weaponstate", 0)
 	if NOTIFY and type(et.trap_SendServerCommand) == "function" then
 		local name = (weapon == WP_MEDIC_ADRENALINE) and "adrenaline" or "landmine"
