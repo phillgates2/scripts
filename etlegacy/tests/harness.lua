@@ -65,7 +65,39 @@ function M.build(cfg)
 	function et.G_SoundIndex(_) return 1 end
 	function et.G_Sound(_, _) end
 	function et.trap_SendServerCommand(_, _) end
-	function et.AddWeaponToPlayer(...) end
+
+	-- mimics g_lua.c _et_AddWeaponToPlayer: sets the weapon bit, writes the
+	-- ammo/clip at the weapon's (or shared) pool, and optionally selects it.
+	function et.AddWeaponToPlayer(c, w, ammo, ammoclip, setcurrent)
+		local e = ents[c]
+		if not e then
+			e = {}
+			ents[c] = e
+		end
+		if type(e["ps.weapons"]) ~= "table" then
+			e["ps.weapons"] = { 0, 0 }
+		end
+		local word = math.floor(w / 32) + 1
+		local div = 2 ^ (w % 32)
+		local mask_word = e["ps.weapons"][word] or 0
+		if math.floor(mask_word / div) % 2 == 0 then
+			mask_word = mask_word + div
+		end
+		e["ps.weapons"][word] = mask_word
+		local pool = w
+		if w == et.WP_MEDIC_ADRENALINE then
+			pool = et.WP_MEDIC_SYRINGE
+		end
+		local ammo_arr = (type(e["ps.ammo"]) == "table") and e["ps.ammo"] or {}
+		local clip_arr = (type(e["ps.ammoclip"]) == "table") and e["ps.ammoclip"] or {}
+		ammo_arr[pool + 1]   = ammo or 0
+		clip_arr[pool + 1]   = ammoclip or 0
+		e["ps.ammo"]   = ammo_arr
+		e["ps.ammoclip"] = clip_arr
+		if setcurrent == 1 then
+			e["ps.weapon"] = w
+		end
+	end
 	function et.RemoveWeaponFromPlayer(...) end
 	-- command arguments, set per test with et.set_args{...}
 	local args = {}

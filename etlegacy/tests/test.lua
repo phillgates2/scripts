@@ -325,6 +325,32 @@ local function weapons_mask(list)
 end
 
 -- ---------------------------------------------------------------------------
+print("adrenaline_all_classes: an existing all-class syringe pool is preserved")
+
+ents = {}
+-- engineer that poison_needle.lua has already given a syringe (pool 11 = 8)
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, {
+	["sess.playerType"] = 2,
+	["ps.weapon"]       = 21,
+	["ps.weapons"]      = weapons_mask({ 11 }),
+	["ps.ammoclip"]     = { [12] = 8 },   -- index 11, 0-based
+	["ps.ammo"]         = { [12] = 0 },
+})
+et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = {} })
+granted = {}
+function et.AddWeaponToPlayer(c, w, ammo, clip)
+	granted[#granted + 1] = string.format("%d:%d:%d:%d", c, w, ammo or 0, clip or 0)
+end
+m = load_module("adrenaline_all_classes.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_ClientSpawn(0, 0, 0, 0)
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+check(table.concat(granted, ","):find("0:44:0:9", 1, true) ~= nil,
+	"one adrenaline shot added on top of 8 ready syringes (got "
+	.. table.concat(granted, ",") .. ")")
+
+-- ---------------------------------------------------------------------------
 print("engineer_slot7_toggle: slot 7 alternates landmine <-> adrenaline")
 
 ents = {}
@@ -516,6 +542,115 @@ m.et_WeaponFire(0, 11)           -- WP_MEDIC_SYRINGE
 m.et_RunFrame(2000)
 check(table.concat(et.damage_log, ","):find("1:0:10:24", 1, true) ~= nil,
 	"the traced stab poisoned the enemy in front of the medic")
+
+-- ---------------------------------------------------------------------------
+print("poison_needle: ALL_CLASSES grants the syringe to every class")
+
+ents = {}
+-- a soldier with no syringe: the module must give one on spawn
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, {
+	["sess.playerType"] = 0,              -- PC_SOLDIER
+	["ps.weapons"]      = weapons_mask({}),
+})
+-- a medic already has the syringe: its loadout must be left alone
+ents[1] = player(1, 100, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, {
+	["sess.playerType"] = 1,              -- PC_MEDIC
+	["ps.weapons"]      = weapons_mask({ 11 }),
+	["ps.ammoclip"]     = { [12] = 6 },   -- index 11, 0-based
+	["ps.ammo"]         = { [12] = 0 },
+})
+et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = {} })
+granted = {}
+function et.AddWeaponToPlayer(c, w) granted[#granted + 1] = c .. ":" .. w end
+m = load_module("poison_needle.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_ClientSpawn(0, 0, 0, 0)
+m.et_ClientSpawn(1, 0, 0, 0)
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+check(table.concat(granted, ","):find("0:11", 1, true) ~= nil,
+	"a class without a syringe was given the poison needle")
+check(not table.concat(granted, ","):find("1:11", 1, true),
+	"the medic's existing syringe was left alone (got "
+	.. table.concat(granted, ",") .. ")")
+
+-- ---------------------------------------------------------------------------
+print("poison_needle: an existing adrenaline share of pool 11 is preserved")
+
+ents = {}
+-- adrenaline_all_classes already gave this soldier one adrenaline shot: the
+-- poison needle must be added on top of that shared pool, not reset it
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, {
+	["sess.playerType"] = 0,              -- PC_SOLDIER
+	["ps.weapons"]      = weapons_mask({ 44 }),
+	["ps.ammoclip"]     = { [12] = 1 },   -- index 11, 0-based
+	["ps.ammo"]         = { [12] = 0 },
+})
+et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = {} })
+granted = {}
+function et.AddWeaponToPlayer(c, w, ammo, clip)
+	granted[#granted + 1] = string.format("%d:%d:%d:%d", c, w, ammo or 0, clip or 0)
+end
+m = load_module("poison_needle.lua", et)
+m.et_InitGame(0, 0, 0)
+m.et_ClientSpawn(0, 0, 0, 0)
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+check(table.concat(granted, ","):find("0:11:0:9", 1, true) ~= nil,
+	"syringes added on top of the adrenaline shot (got "
+	.. table.concat(granted, ",") .. ")")
+
+-- ---------------------------------------------------------------------------
+print("poison_needle: slot 5 toggles the needle and the class's bank-5 tool")
+
+ents = {}
+-- engineer carrying pliers (21) and the new syringe (11), current hand = pliers
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, {
+	["sess.playerType"] = 2,              -- PC_ENGINEER
+	["ps.weapon"]       = 21,
+	["ps.weapons"]      = weapons_mask({ 11, 21 }),
+	["ps.ammoclip"]     = { [12] = 8, [22] = 999 },  -- pool 11 / pool 21
+	["ps.ammo"]         = { [12] = 0, [22] = 0 },
+})
+et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = {} })
+m = load_module("poison_needle.lua", et, { DEBUG = true })
+m.et_InitGame(0, 0, 0)
+
+et.set_args({ "weaponbank", "5" })
+local r = m.et_ClientCommand(0, "weaponbank")
+check(r == 1, "slot 5 was intercepted (got " .. tostring(r) .. ")")
+check(ents[0]["ps.weapon"] == 11, "pliers -> poison needle (got "
+	.. tostring(ents[0]["ps.weapon"]) .. ")")
+r = m.et_ClientCommand(0, "weaponbank")
+check(r == 1, "second press also intercepted")
+check(ents[0]["ps.weapon"] == 21, "poison needle -> pliers (got "
+	.. tostring(ents[0]["ps.weapon"]) .. ")")
+
+et.set_args({ "weaponbank", "3" })
+check(m.et_ClientCommand(0, "weaponbank") == 0, "other banks pass through")
+
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
+
+-- ---------------------------------------------------------------------------
+print("poison_needle: slot 5 is untouched for a player without the needle")
+
+ents = {}
+ents[0] = player(2, 100, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, {
+	["sess.playerType"] = 0,
+	["ps.weapon"]       = 4,
+	["ps.weapons"]      = weapons_mask({}),
+})
+et, _, out = harness.build({ sv_maxclients = 20, ents = ents, clientless = {} })
+m = load_module("poison_needle.lua", et)
+m.et_InitGame(0, 0, 0)
+et.set_args({ "weaponbank", "5" })
+check(m.et_ClientCommand(0, "weaponbank") == 0,
+	"a no-syringe player keeps stock slot-5 behaviour")
+check(ents[0]["ps.weapon"] == 4, "weapon unchanged (got "
+	.. tostring(ents[0]["ps.weapon"]) .. ")")
+joined = table.concat(out, "\n")
+check(not joined:find("ERROR"), "no ERROR line")
 
 -- ---------------------------------------------------------------------------
 print("no_combat_selfkill: /kill is refused right after taking enemy fire")

@@ -12,7 +12,7 @@ Small server-side scripts. Currently: Lua modules for an
 | `kick_projectiles.lua` | lets players kick grenades / airstrike canisters / smoke bombs away |
 | `engineer_slot7_toggle.lua` | weapon slot 7 toggles between landmine and adrenaline instead of always giving the landmine |
 | `soldier_smg_slot2.lua` | soldiers can pull their SMG (Thompson / MP40) from weapon slot 2 when it is their slot 3 weapon |
-| `poison_needle.lua` | the medic syringe poisons enemies: damage over time credited to the medic |
+| `poison_needle.lua` | every class gets the syringe; stabbing an enemy poisons them with damage over time credited to the injector |
 | `throwable_knife.lua` | knives can be thrown as a projectile, and picked back up where they land |
 | `no_combat_selfkill.lua` | `/kill` is refused while the player is in a fire fight or an enemy can see them |
 

@@ -9,6 +9,7 @@ against the official [Legacy Lua API](https://etlegacy-lua-docs.readthedocs.io/)
 | [`adrenaline_all_classes.lua`](adrenaline_all_classes.lua) | Gives the adrenaline shot to every class **except medics**, which can **never** use adrenaline anymore |
 | [`covert_disguise_break.lua`](covert_disguise_break.lua) | Breaks a Covert Ops' disguise when they switch weapons (weapon button) in front of an enemy |
 | [`kick_projectiles.lua`](kick_projectiles.lua) | Lets players kick grenades and canisters with the USE button |
+| [`poison_needle.lua`](poison_needle.lua) | Every class gets the syringe; stabbing an enemy poisons them with damage over time credited to the injector |
 
 ## adrenaline_all_classes.lua
 
@@ -38,7 +39,9 @@ second adrenaline powerup
 
 Note: `et.RemoveWeaponFromPlayer` only clears the weapon bit - the shared
 ammo pool 11 (syringe/adrenaline) is left alone, so medic syringes are
-unaffected.
+unaffected. If `poison_needle.lua` is loaded too (so non-medics carry a
+syringe in that same pool), the adrenaline shot is added on top of the
+syringe count instead of resetting it.
 
 ## covert_disguise_break.lua
 
@@ -117,6 +120,31 @@ Troubleshooting (`DEBUG = true`):
   -sin(pitch))`. Set `CONE_HALF_ANGLE` to 90 to confirm.
 
 `DEBUG` is `false` by default for production. Set `DEBUG = true` to enable diagnostics.
+
+## poison_needle.lua
+
+Turns the syringe into an **offensive weapon for every class**: a stab on
+an enemy applies `POISON_TICK_DAMAGE` every `POISON_TICK_MS` for
+`POISON_DURATION_MS`, credited to the injector (kill, obituary, stats).
+
+With `ALL_CLASSES = true` (default) every class is also **given the
+syringe** on spawn - soldiers, engineers, field ops and covert ops as well
+as medics. The syringe sits in weapon bank 5, so this module intercepts the
+slot-5 command and **toggles** between the bank-5 weapons a player owns
+(syringe <-> engineer pliers / field ops or covert ops smoke). That keeps
+the class's existing tool reachable while adding the needle. The syringe
+still revives dead team mates whoever carries it. The slot-5 switch is
+server side, so the client HUD may show the previous bank-5 weapon for one
+frame (same behaviour as the bank-7 toggle module).
+
+Config (top of the file): `POISON_DURATION_MS`, `POISON_TICK_MS`,
+`POISON_TICK_DAMAGE`, `SYRINGE_RANGE`, `CURE_ON_MEDPACK`,
+`CURE_ON_ADRENALINE`, `ALL_CLASSES`, `SYRINGE_AMMO`, `SYRINGE_AMMOCLIP`,
+`SLOT5_TOGGLE`, `NOTIFY_SWITCH`, `TOGGLE_COMMAND`, `DEBUG`.
+
+The syringe shares ammo pool 11 with the adrenaline shot. If
+`adrenaline_all_classes.lua` is loaded too, that module adds the adrenaline
+shot on top of the syringe count rather than resetting it.
 
 > **API note:** the Legacy Lua API does not expose the raw usercmd button
 > state, so both "USE button" (kick) and "weapon button" (disguise break)
