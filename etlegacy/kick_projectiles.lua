@@ -51,6 +51,16 @@
      triggered by proximity + aim while standing still instead of the
      button press itself.
 
+ FIXED: "pointing at the ground does not kick the canister"
+   The aim test used to be a plain view cone from the eyes to the
+   projectile. Looking DOWN at the floor next to a canister lying at your
+   feet puts the crosshair on the ground rather than on the small canister
+   model, so the cone test failed and nothing was kicked - the exact case
+   people hit most often. The test now also accepts a projectile that lies
+   within AIM_SLOP units of the line you are aiming along (and in front of
+   you), so aiming at the ground at/near the canister kicks it. See
+   looking_at() below.
+
  TROUBLESHOOTING
    [kick_projectiles] ERROR: ... tried to get invalid gentity field
    "sess.sessionTeam"
@@ -118,6 +128,12 @@ local KICK_POP          = 4      -- units lifted off the surface on a kick
 local KICK_SOUND        = true   -- play a footstep sound at the projectile
 local KICK_SOUND_FILE   = "sound/footsteps/footstep1.wav"
 local STATIONARY_SPEED  = 120    -- max horizontal speed (u/s) for a "use" attempt
+-- How far the projectile may sit from the line you are aiming along before
+-- the kick is refused. This is what makes "point at the GROUND next to /
+-- under the canister" work: aiming at the floor never puts the crosshair on
+-- the small canister model itself, so a pure eye->projectile cone test
+-- silently fails on exactly the case players complain about.
+local AIM_SLOP          = 40     -- units around the aim ray that still count
 local DEBUG             = (DEBUG ~= nil and DEBUG) or false   -- console diagnostics (default false for production)
 -- weapons that can be kicked (weapon ids, bg_public.h / et.WP_*)
 local KICKABLE_WEAPONS = {
@@ -294,6 +310,64 @@ local function collect_players(players)
 	end
 end
 
+--[[
+ Is player `pl` aiming at the projectile at `pos`?
+
+ THE "POINTING AT THE GROUND" BUG
+ A plain cone test (angle between the view vector and the eye->projectile
+ vector) fails for the most natural way to kick something lying at your
+ feet: you look DOWN at the floor, slightly past the object. An airstrike
+ canister is a small model, so when the crosshair is on the ground just
+ beyond or beside it, the eye->canister angle can easily exceed the cone
+ even though the canister is 20 units away and obviously what you meant.
+ Players see this as "kick does not work when I point at the ground".
+
+ So the aim test is done in two ways and either one is enough:
+
+   1. the cone test (works when the crosshair is on the object), and
+   2. a distance-to-aim-ray test: project the eye->projectile vector onto
+      the view vector and measure how far the projectile sits from that
+      ray. Anything within AIM_SLOP units of the line you are aiming along,
+      and in front of you (t >= 0) rather than behind, counts.
+
+ Test 2 is what makes aiming at the floor next to / under the canister
+ kick it, while still refusing a projectile that is behind you or off to
+ the side.
+]]--
+local function looking_at(pl, pos)
+	local ex = pos[1] - pl.eye[1]
+	local ey = pos[2] - pl.eye[2]
+	local ez = pos[3] - pl.eye[3]
+	local el = math.sqrt(ex * ex + ey * ey + ez * ez)
+
+	-- standing right on top of it: no meaningful direction, always allow
+	if el < 1 then
+		return true
+	end
+
+	-- 1. crosshair-on-the-object cone test
+	local dot = pl.fwd[1] * ex / el
+	        + pl.fwd[2] * ey / el
+	        + pl.fwd[3] * ez / el
+	if dot >= CONE_COS then
+		return true
+	end
+
+	-- 2. distance from the aim ray. t is how far along the view vector the
+	--    projectile projects; negative means it is behind the player.
+	local t = pl.fwd[1] * ex + pl.fwd[2] * ey + pl.fwd[3] * ez
+	if t < 0 then
+		return false
+	end
+
+	-- perpendicular distance^2 = |v|^2 - t^2  (fwd is a unit vector)
+	local perp2 = el * el - t * t
+	if perp2 < 0 then
+		perp2 = 0
+	end
+	return perp2 <= AIM_SLOP * AIM_SLOP
+end
+
 -- kicks the projectile entity `p` away from player `pl`
 local function kick_projectile(p, pos, pl, levelTime)
 	local feetX  = pl.origin[1]
@@ -417,19 +491,9 @@ function et_RunFrame(levelTime)
 					local d2 = dx * dx + dy * dy + dz * dz
 
 					if d2 <= RANGE_SQ and pl.speed2 <= STATIONARY_SQ then
-						-- must be looking at it (from the eyes)
-						local ex = pos[1] - pl.eye[1]
-						local ey = pos[2] - pl.eye[2]
-						local ez = pos[3] - pl.eye[3]
-						local el = math.sqrt(ex * ex + ey * ey + ez * ez)
-						if el >= 1 then
-							local dot = pl.fwd[1] * ex / el
-							        + pl.fwd[2] * ey / el
-							        + pl.fwd[3] * ez / el
-							if dot >= CONE_COS then
-								kick_projectile(p, pos, pl, levelTime)
-								break  -- one kick per frame per projectile
-							end
+						if looking_at(pl, pos) then
+							kick_projectile(p, pos, pl, levelTime)
+							break  -- one kick per frame per projectile
 						end
 					end
 				end
